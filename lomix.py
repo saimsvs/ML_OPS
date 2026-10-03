@@ -1,4 +1,3 @@
-
 import logging
 from itertools import combinations
 
@@ -79,6 +78,9 @@ class CombinatorialMutationsLossModule(nn.Module):
     BUSI adaptation:
     BCEWithLogitsLoss requires floating-point targets,
     so label_batch.float() is used for BCE.
+
+    For binary segmentation with one output channel,
+    DiceLoss uses sigmoid rather than softmax.
     """
 
     def __init__(
@@ -183,11 +185,7 @@ class CombinatorialMutationsLossModule(nn.Module):
         )
 
         # --------------------------------------------------
-        # FIX:
         # Create concat convolution layers once here.
-        #
-        # They are now registered as model parameters and
-        # will actually be updated by the optimizer.
         # --------------------------------------------------
 
         self.concat_modules = nn.ModuleDict(
@@ -305,10 +303,13 @@ class CombinatorialMutationsLossModule(nn.Module):
                 label_batch.float()
             )
 
+            # FIX:
+            # Binary segmentation has one output channel,
+            # so DiceLoss must use sigmoid, not softmax.
             loss_dice = dice_loss(
                 fmap,
                 label_batch,
-                softmax=True
+                softmax=False
             )
 
             combined_loss = (
@@ -412,8 +413,6 @@ class CombinatorialMutationsLossModule(nn.Module):
                         dim=1
                     )
 
-                    # Use the registered convolution layer
-                    # created in __init__.
                     conv = self.concat_modules[
                         str(len(comb))
                     ]
@@ -481,10 +480,13 @@ class CombinatorialMutationsLossModule(nn.Module):
                     label_batch.float()
                 )
 
+                # FIX:
+                # Binary segmentation has one output channel,
+                # so DiceLoss must use sigmoid, not softmax.
                 loss_dice = dice_loss(
                     mutated,
                     label_batch,
-                    softmax=True
+                    softmax=False
                 )
 
                 combined_loss = (
@@ -572,7 +574,7 @@ class CombinatorialMutationsLossModule(nn.Module):
             svals = synth_vals[op]
 
             logging.info(
-                "Synthesized Weights for '%s' (softplus): %s",
+                "Synthesized Weights for '%s': %s",
                 op,
                 " ".join(
                     f"{sv.item():.4f}"
