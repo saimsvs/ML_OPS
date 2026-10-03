@@ -1,4 +1,4 @@
-
+python
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -171,7 +171,7 @@ optimizer = torch.optim.Adam(
 # 9. TRAINING SETTINGS
 # ============================================================
 
-num_epochs = 3
+num_epochs = 100
 
 best_val_loss = float("inf")
 
@@ -354,57 +354,46 @@ for epoch in range(num_epochs):
 
 
     # ========================================================
-    # 14. SAVE CHECKPOINT
-    # ========================================================
-
-    checkpoint = {
-        "epoch": epoch + 1,
-
-        "model_state_dict":
-            model.state_dict(),
-
-        "lomix_state_dict":
-            lomix.state_dict(),
-
-        "optimizer_state_dict":
-            optimizer.state_dict(),
-
-        "train_loss":
-            avg_train_loss,
-
-        "val_loss":
-            avg_val_loss
-    }
-
-    torch.save(
-        checkpoint,
-        f"busi_lomix_epoch_{epoch + 1}.pth"
-    )
-
-    print(
-        f"Saved: "
-        f"busi_lomix_epoch_{epoch + 1}.pth"
-    )
-
-
-    # ========================================================
-    # 15. SAVE BEST MODEL
+    # 14. SAVE ONLY THE BEST MODEL
     # ========================================================
 
     if avg_val_loss < best_val_loss:
 
         best_val_loss = avg_val_loss
 
+        checkpoint = {
+            "epoch": epoch + 1,
+
+            "model_state_dict":
+                model.state_dict(),
+
+            "lomix_state_dict":
+                lomix.state_dict(),
+
+            "optimizer_state_dict":
+                optimizer.state_dict(),
+
+            "train_loss":
+                avg_train_loss,
+
+            "val_loss":
+                avg_val_loss
+        }
+
         torch.save(
             checkpoint,
             "busi_lomix_best.pth"
         )
 
-        print("New best model saved!")
+        print(
+            f"New best model saved: "
+            f"busi_lomix_best.pth "
+            f"(epoch {epoch + 1})"
+        )
 
 
 # ============================================================
-# 16. TRAINING COMPLETE
+# 15. TRAINING COMPLETE
 # ============================================================
 
 print()
