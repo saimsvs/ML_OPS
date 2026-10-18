@@ -1,96 +1,62 @@
-python
+
 import torch
 from torch.utils.data import DataLoader
 
-from dataset_busi import BUSIDataset
 from unet_lomix import UNetLoMix
+from dataset_busi import BUSIDataset
 
 
-# --------------------------------------------------
-# Settings
-# --------------------------------------------------
+# ============================================================
+# 1. DEVICE
+# ============================================================
 
-DEVICE = torch.device(
-    "cuda" if torch.cuda.is_available() else "cpu"
+if torch.backends.mps.is_available():
+    device = torch.device("mps")
+elif torch.cuda.is_available():
+    device = torch.device("cuda")
+else:
+    device = torch.device("cpu")
+
+print("Using device:", device)
+
+
+# ============================================================
+# 2. DATASET
+# ============================================================
+
+DATASET_PATH = "/kaggle/working/ML_OPS/BUSI_processed"
+
+test_dataset = BUSIDataset(
+    DATASET_PATH,
+    split="test"
 )
-
-BATCH_SIZE = 4
-
-TEST_DIR = "BUSI_processed/test"
-
-MODEL_PATH = "busi_baseline_epoch_55.pth"
-
-
-# --------------------------------------------------
-# Dice score
-# --------------------------------------------------
-
-def dice_score(pred, target):
-
-    intersection = (pred * target).sum()
-
-    dice = (
-        (2 * intersection + 1e-6)
-        /
-        (pred.sum() + target.sum() + 1e-6)
-    )
-
-    return dice
-
-
-# --------------------------------------------------
-# IoU score
-# --------------------------------------------------
-
-def iou_score(pred, target):
-
-    intersection = (pred * target).sum()
-
-    union = (
-        pred.sum()
-        + target.sum()
-        - intersection
-    )
-
-    iou = (
-        (intersection + 1e-6)
-        /
-        (union + 1e-6)
-    )
-
-    return iou
-
-
-# --------------------------------------------------
-# Dataset
-# --------------------------------------------------
-
-test_dataset = BUSIDataset(TEST_DIR)
 
 test_loader = DataLoader(
     test_dataset,
-    batch_size=BATCH_SIZE,
+    batch_size=4,
     shuffle=False
 )
 
+print("test:", len(test_dataset), "images found")
 
-# --------------------------------------------------
-# Model
-# --------------------------------------------------
+
+# ============================================================
+# 3. CREATE MODEL
+# ============================================================
 
 model = UNetLoMix(
     n_channels=1,
     n_classes=1
-).to(DEVICE)
+).to(device)
 
 
-# --------------------------------------------------
-# Load trained checkpoint
-# --------------------------------------------------
+# ============================================================
+# 4. LOAD BEST CHECKPOINT
+# ============================================================
 
 checkpoint = torch.load(
-    MODEL_PATH,
-    map_location=DEVICE
+    "busi_baseline_best.pth",
+    map_location=device
 )
 
 model.load_state_dict(
@@ -99,77 +65,204 @@ model.load_state_dict(
 
 model.eval()
 
-print("Loaded model from epoch:", checkpoint["epoch"])
-print("Device:", DEVICE)
-print("Test images:", len(test_dataset))
+print(
+    "Loaded best model from epoch:",
+    checkpoint["epoch"]
+)
+
+print(
+    "Training loss:",
+    checkpoint["train_loss"]
+)
+
+print(
+    "Validation loss:",
+    checkpoint["val_loss"]
+)
 
 
-# --------------------------------------------------
-# Evaluation
-# --------------------------------------------------
+# ============================================================
+# 5. DICE FUNCTION
+# ============================================================
+
+def calculate_dice(prediction, target, smooth=1e-5):
+
+    prediction = prediction.reshape(
+        prediction.shape[0], -1
+    )
+
+    target = target.reshape(
+        target.shape[0], -1
+    )
+
+    intersection = (
+        prediction * target
+    ).sum(dim=1)
+
+    dice = (
+        2 * intersection + smooth
+    ) / (
+        prediction.sum(dim=1)
+        + target.sum(dim=1)
+        + smooth
+    )
+
+    return dice
+
+
+# ============================================================
+# 6. IoU FUNCTION
+# ============================================================
+
+def calculate_iou(prediction, target, smooth=1e-5):
+
+    prediction = prediction.reshape(
+        prediction.shape[0], -1
+    )
+
+    target = target.reshape(
+        target.shape[0], -1
+    )
+
+    intersection = (
+        prediction * target
+    ).sum(dim=1)
+
+    union = (
+        prediction.sum(dim=1)
+        + target.sum(dim=1)
+        - intersection
+    )
+
+    iou = (
+        intersection + smooth
+    ) / (
+        union + smooth
+    )
+
+    return iou
+
+
+# ============================================================
+# 7. TEST
+# ============================================================
 
 total_dice = 0.0
 total_iou = 0.0
+
 total_images = 0
 
 
 with torch.no_grad():
 
-    for images, masks in test_loader:
+    for batch_idx, (images, masks) in enumerate(test_loader):
 
-        images = images.to(DEVICE)
-        masks = masks.to(DEVICE)
+        images = images.to(device)
+        masks = masks.to(device)
 
-        # U-Net produces p1, p2, p3, p4
-        outputs = model(images)
+        # ----------------------------------------------------
+        # Dataset mask:
+        # [B, 256, 256]
+        #
+        # Model output:
+        # [B, 1, 256, 256]
+        #
+        # Add channel dimension.
+        # ----------------------------------------------------
 
-        # Standard U-Net uses ONLY the final output
-        logits = outputs[3]
+        masks = masks.unsqueeze(1)
 
+        # ----------------------------------------------------
+        # U-Net produces 4 predictions
+        # ----------------------------------------------------
+
+        predictions = model(images)
+
+        # ----------------------------------------------------
+        # For inference we use the FINAL decoder prediction.
+        #
+        # LoMix is a training/supervision method and is not
+        # required during inference.
+        # ----------------------------------------------------
+
+        final_prediction = torch.stack(predictions, dim=0).sum(dim=0)
+
+        # ----------------------------------------------------
         # Convert logits to probabilities
-        probabilities = torch.sigmoid(logits)
+        # ----------------------------------------------------
 
+        probabilities = torch.sigmoid(
+            final_prediction
+        )
+
+        # ----------------------------------------------------
         # Convert probabilities to binary masks
-        predictions = (
-            probabilities > 0.5
+        # ----------------------------------------------------
+
+        predicted_masks = (
+            probabilities >= 0.5
         ).float()
 
-        # Calculate metrics for every image
-        for i in range(images.size(0)):
+        # ----------------------------------------------------
+        # Calculate Dice
+        # ----------------------------------------------------
 
-            dice = dice_score(
-                predictions[i],
-                masks[i]
-            )
+        dice_scores = calculate_dice(
+            predicted_masks,
+            masks
+        )
 
-            iou = iou_score(
-                predictions[i],
-                masks[i]
-            )
+        # ----------------------------------------------------
+        # Calculate IoU
+        # ----------------------------------------------------
 
-            total_dice += dice.item()
-            total_iou += iou.item()
+        iou_scores = calculate_iou(
+            predicted_masks,
+            masks
+        )
 
-            total_images += 1
+        # ----------------------------------------------------
+        # Add batch results
+        # ----------------------------------------------------
+
+        batch_size = images.shape[0]
+
+        total_dice += dice_scores.sum().item()
+        total_iou += iou_scores.sum().item()
+
+        total_images += batch_size
+
+        print(
+            f"Batch {batch_idx + 1}/{len(test_loader)} "
+            f"Dice: {dice_scores.mean().item():.4f} "
+            f"IoU: {iou_scores.mean().item():.4f}"
+        )
 
 
-# --------------------------------------------------
-# Final results
-# --------------------------------------------------
+# ============================================================
+# 8. FINAL RESULTS
+# ============================================================
 
-average_dice = (
-    total_dice / total_images
-)
-
-average_iou = (
-    total_iou / total_images
-)
+average_dice = total_dice / total_images
+average_iou = total_iou / total_images
 
 
 print()
-print("===================================")
-print("Standard U-Net Evaluation")
-print("===================================")
-print(f"Dice: {average_dice:.4f}")
-print(f"IoU : {average_iou:.4f}")
-print("===================================")
+print("=" * 60)
+print("TEST RESULTS")
+print("=" * 60)
+
+print(
+    f"Test images: {total_images}"
+)
+
+print(
+    f"Dice: {average_dice:.4f}"
+)
+
+print(
+    f"IoU:  {average_iou:.4f}"
+)
+
+print("=" * 60)
+

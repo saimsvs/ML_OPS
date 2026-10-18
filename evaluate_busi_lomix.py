@@ -24,7 +24,7 @@ print("Using device:", device)
 # 2. DATASET
 # ============================================================
 
-DATASET_PATH = "/Users/saimasad/Desktop/ML_PROJ/BUSI_processed"
+DATASET_PATH = "/kaggle/working/ML_OPS/BUSI_processed"
 
 test_dataset = BUSIDataset(
     DATASET_PATH,
@@ -185,7 +185,7 @@ with torch.no_grad():
         # required during inference.
         # ----------------------------------------------------
 
-        final_prediction = predictions[-1]
+        final_prediction = torch.stack(predictions, dim=0).sum(dim=0)
 
         # ----------------------------------------------------
         # Convert logits to probabilities
