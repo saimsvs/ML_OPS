@@ -88,21 +88,7 @@ st.markdown(
         font-size: 0.95rem;
     }
     .lomix-badges {
-        display: flex;
-        gap: 0.5rem;
-        flex-wrap: wrap;
-    }
-    .lomix-badge {
-        background: rgba(255, 255, 255, 0.16);
-        border: 1px solid rgba(255, 255, 255, 0.35);
-        color: #FFFFFF;
-        font-size: 0.72rem;
-        font-weight: 700;
-        letter-spacing: 0.08em;
-        padding: 0.35rem 0.7rem;
-        border-radius: 999px;
-        backdrop-filter: blur(4px);
-        white-space: nowrap;
+        display: none;
     }
 
     /* ---------- sections ---------- */
@@ -233,11 +219,6 @@ st.markdown(
             <div class="lomix-eyebrow">Clinical Image Analysis &middot; Research Prototype</div>
             <h1>Breast Ultrasound Lesion Segmentation</h1>
             <p>LoMix-adapted four-head U-Net &middot; Trained on the BUSI benchmark</p>
-        </div>
-        <div class="lomix-badges">
-            <span class="lomix-badge">EPOCH 55</span>
-            <span class="lomix-badge">256 &times; 256 INPUT</span>
-            <span class="lomix-badge">CPU READY</span>
         </div>
     </div>
     """,
