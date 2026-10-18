@@ -458,22 +458,6 @@ else:
         unsafe_allow_html=True
     )
 
-st.markdown(
-    """
-    <div class="lomix-note" style="margin-top: 0.8rem;">
-    The mask is the model's raw prediction. Dice and IoU cannot be
-    computed for uploaded images because they have no ground-truth
-    mask. Test-set metrics were measured on the BUSI test split only.
-    </div>
-    """,
-    unsafe_allow_html=True
-)
-
-
-# ============================================================
-# 8. TECHNICAL DETAILS, CITATION, DISCLAIMER
-# ============================================================
-
 with st.expander("Technical details & model card"):
 
     st.markdown(
@@ -491,18 +475,6 @@ with st.expander("Technical details & model card"):
           mutation loss
         """
     )
-
-st.markdown(
-    """
-    <div class="lomix-cite" style="margin-top: 1rem;">
-    Reference: Rahman and Marculescu, &ldquo;LoMix: Learnable Weighted
-    Multi-Scale Logits Mixing for Medical Image Segmentation,&rdquo;
-    NeurIPS 2025. arXiv:2510.22995 &mdash; this deployment is an
-    independent academic adaptation using a compact U-Net.
-    </div>
-    """,
-    unsafe_allow_html=True
-)
 
 st.markdown(
     """
