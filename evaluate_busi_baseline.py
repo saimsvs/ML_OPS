@@ -1,235 +1,270 @@
+
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from dataset_busi import BUSIDataset
 from unet_lomix import UNetLoMix
+from dataset_busi import BUSIDataset
 
 
-# --------------------------------------------------
-# Settings
-# --------------------------------------------------
+# ============================================================
+# 1. DEVICE
+# ============================================================
 
-DEVICE = torch.device(
-    "cuda" if torch.cuda.is_available() else "cpu"
+if torch.backends.mps.is_available():
+    device = torch.device("mps")
+elif torch.cuda.is_available():
+    device = torch.device("cuda")
+else:
+    device = torch.device("cpu")
+
+print("Using device:", device)
+
+
+# ============================================================
+# 2. DATASET
+# ============================================================
+
+import os
+
+# Override with: DATASET_PATH=/your/path python evaluate_busi_baseline.py
+DATASET_PATH = os.environ.get("DATASET_PATH", "BUSI_processed")
+
+test_dataset = BUSIDataset(
+    DATASET_PATH,
+    split="test"
 )
 
-BATCH_SIZE = 16
-EPOCHS = 100
-LEARNING_RATE = 1e-4
-
-DATASET_ROOT = "BUSI_processed"
-
-SAVE_PATH = "busi_baseline_best.pth"
-
-
-# --------------------------------------------------
-# Dice loss
-# --------------------------------------------------
-
-def dice_loss(logits, targets):
-
-    probs = torch.sigmoid(logits)
-
-    smooth = 1e-6
-
-    intersection = (probs * targets).sum(dim=(1, 2, 3))
-
-    union = (
-        probs.sum(dim=(1, 2, 3))
-        + targets.sum(dim=(1, 2, 3))
-    )
-
-    dice = (
-        (2 * intersection + smooth)
-        / (union + smooth)
-    )
-
-    return 1 - dice.mean()
-
-
-# --------------------------------------------------
-# Combined loss
-# --------------------------------------------------
-
-def combined_loss(logits, targets):
-
-    bce = nn.functional.binary_cross_entropy_with_logits(
-        logits,
-        targets.float()
-    )
-
-    dice = dice_loss(
-        logits,
-        targets
-    )
-
-    return 0.3 * bce + 0.7 * dice
-
-
-# --------------------------------------------------
-# Dataset
-# --------------------------------------------------
-
-train_dataset = BUSIDataset(DATASET_ROOT, split="train")
-val_dataset = BUSIDataset(DATASET_ROOT, split="val")
-
-train_loader = DataLoader(
-    train_dataset,
-    batch_size=BATCH_SIZE,
-    shuffle=True
-)
-
-val_loader = DataLoader(
-    val_dataset,
-    batch_size=BATCH_SIZE,
+test_loader = DataLoader(
+    test_dataset,
+    batch_size=4,
     shuffle=False
 )
 
+print("test:", len(test_dataset), "images found")
 
-# --------------------------------------------------
-# Model
-# --------------------------------------------------
+
+# ============================================================
+# 3. CREATE MODEL
+# ============================================================
 
 model = UNetLoMix(
     n_channels=1,
     n_classes=1
-).to(DEVICE)
+).to(device)
 
 
-# --------------------------------------------------
-# Optimizer
-# --------------------------------------------------
+# ============================================================
+# 4. LOAD BEST CHECKPOINT
+# ============================================================
 
-optimizer = torch.optim.Adam(
-    model.parameters(),
-    lr=LEARNING_RATE
+checkpoint = torch.load(
+    "busi_baseline_best.pth",
+    map_location=device
+)
+
+model.load_state_dict(
+    checkpoint["model_state_dict"]
+)
+
+model.eval()
+
+print(
+    "Loaded best model from epoch:",
+    checkpoint["epoch"]
+)
+
+print(
+    "Training loss:",
+    checkpoint["train_loss"]
+)
+
+print(
+    "Validation loss:",
+    checkpoint["val_loss"]
 )
 
 
-# --------------------------------------------------
-# Training settings
-# --------------------------------------------------
+# ============================================================
+# 5. DICE FUNCTION
+# ============================================================
 
-best_val_loss = float("inf")
+def calculate_dice(prediction, target, smooth=1e-5):
+
+    prediction = prediction.reshape(
+        prediction.shape[0], -1
+    )
+
+    target = target.reshape(
+        target.shape[0], -1
+    )
+
+    intersection = (
+        prediction * target
+    ).sum(dim=1)
+
+    dice = (
+        2 * intersection + smooth
+    ) / (
+        prediction.sum(dim=1)
+        + target.sum(dim=1)
+        + smooth
+    )
+
+    return dice
 
 
-# --------------------------------------------------
-# Training
-# --------------------------------------------------
+# ============================================================
+# 6. IoU FUNCTION
+# ============================================================
 
-for epoch in range(EPOCHS):
+def calculate_iou(prediction, target, smooth=1e-5):
 
-    model.train()
+    prediction = prediction.reshape(
+        prediction.shape[0], -1
+    )
 
-    total_train_loss = 0.0
+    target = target.reshape(
+        target.shape[0], -1
+    )
 
-    for images, masks in train_loader:
+    intersection = (
+        prediction * target
+    ).sum(dim=1)
 
-        images = images.to(DEVICE)
-        masks = masks.to(DEVICE)
+    union = (
+        prediction.sum(dim=1)
+        + target.sum(dim=1)
+        - intersection
+    )
 
-        # Dataset masks: [B, H, W]
-        # Model output:   [B, 1, H, W]
+    iou = (
+        intersection + smooth
+    ) / (
+        union + smooth
+    )
+
+    return iou
+
+
+# ============================================================
+# 7. TEST
+# ============================================================
+
+total_dice = 0.0
+total_iou = 0.0
+
+total_images = 0
+
+
+with torch.no_grad():
+
+    for batch_idx, (images, masks) in enumerate(test_loader):
+
+        images = images.to(device)
+        masks = masks.to(device)
+
+        # ----------------------------------------------------
+        # Dataset mask:
+        # [B, 256, 256]
+        #
+        # Model output:
+        # [B, 1, 256, 256]
+        #
+        # Add channel dimension.
+        # ----------------------------------------------------
+
         masks = masks.unsqueeze(1)
 
-        optimizer.zero_grad()
+        # ----------------------------------------------------
+        # U-Net produces 4 predictions
+        # ----------------------------------------------------
 
-        # U-Net produces p1, p2, p3, p4
-        outputs = model(images)
+        predictions = model(images)
 
-        # Standard U-Net uses ONLY final prediction
-        p4 = outputs[3]
+        # ----------------------------------------------------
+        # BASELINE (last-layer supervision):
+        # only the final decoder head (p4) was trained, so only
+        # p4 is used here. Heads p1-p3 never received a loss and
+        # must NOT be added in.
+        # ----------------------------------------------------
 
-        loss = combined_loss(
-            p4,
+        final_prediction = predictions[-1]
+
+        # ----------------------------------------------------
+        # Convert logits to probabilities
+        # ----------------------------------------------------
+
+        probabilities = torch.sigmoid(
+            final_prediction
+        )
+
+        # ----------------------------------------------------
+        # Convert probabilities to binary masks
+        # ----------------------------------------------------
+
+        predicted_masks = (
+            probabilities >= 0.5
+        ).float()
+
+        # ----------------------------------------------------
+        # Calculate Dice
+        # ----------------------------------------------------
+
+        dice_scores = calculate_dice(
+            predicted_masks,
             masks
         )
 
-        loss.backward()
+        # ----------------------------------------------------
+        # Calculate IoU
+        # ----------------------------------------------------
 
-        optimizer.step()
-
-        total_train_loss += loss.item()
-
-    average_train_loss = (
-        total_train_loss / len(train_loader)
-    )
-
-
-    # --------------------------------------------------
-    # Validation
-    # --------------------------------------------------
-
-    model.eval()
-
-    total_val_loss = 0.0
-
-    with torch.no_grad():
-
-        for images, masks in val_loader:
-
-            images = images.to(DEVICE)
-            masks = masks.to(DEVICE)
-
-            masks = masks.unsqueeze(1)
-
-            outputs = model(images)
-
-            p4 = outputs[3]
-
-            loss = combined_loss(
-                p4,
-                masks
-            )
-
-            total_val_loss += loss.item()
-
-    average_val_loss = (
-        total_val_loss / len(val_loader)
-    )
-
-
-    # --------------------------------------------------
-    # Print results
-    # --------------------------------------------------
-
-    print(
-        f"Epoch {epoch + 1}/{EPOCHS} "
-        f"| Train Loss: {average_train_loss:.4f} "
-        f"| Val Loss: {average_val_loss:.4f}"
-    )
-
-
-    # --------------------------------------------------
-    # Save ONLY the best model
-    # --------------------------------------------------
-
-    if average_val_loss < best_val_loss:
-
-        best_val_loss = average_val_loss
-
-        torch.save(
-            {
-                "epoch": epoch + 1,
-                "model_state_dict": model.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
-                "train_loss": average_train_loss,
-                "val_loss": average_val_loss
-            },
-            SAVE_PATH
+        iou_scores = calculate_iou(
+            predicted_masks,
+            masks
         )
+
+        # ----------------------------------------------------
+        # Add batch results
+        # ----------------------------------------------------
+
+        batch_size = images.shape[0]
+
+        total_dice += dice_scores.sum().item()
+        total_iou += iou_scores.sum().item()
+
+        total_images += batch_size
 
         print(
-            f"New best model saved: {SAVE_PATH}"
+            f"Batch {batch_idx + 1}/{len(test_loader)} "
+            f"Dice: {dice_scores.mean().item():.4f} "
+            f"IoU: {iou_scores.mean().item():.4f}"
         )
 
 
-# --------------------------------------------------
-# Training complete
-# --------------------------------------------------
+# ============================================================
+# 8. FINAL RESULTS
+# ============================================================
+
+average_dice = total_dice / total_images
+average_iou = total_iou / total_images
+
 
 print()
-print("Training completed.")
-print("Best validation loss:", best_val_loss)
-print("Best model saved to:", SAVE_PATH)
+print("=" * 60)
+print("TEST RESULTS")
+print("=" * 60)
+
+print(
+    f"Test images: {total_images}"
+)
+
+print(
+    f"Dice: {average_dice:.4f}"
+)
+
+print(
+    f"IoU:  {average_iou:.4f}"
+)
+
+print("=" * 60)
