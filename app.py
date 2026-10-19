@@ -285,19 +285,6 @@ st.sidebar.markdown(
 
 st.sidebar.markdown("---")
 
-st.sidebar.markdown("**Inference pipeline**")
-st.sidebar.markdown(
-    """
-    1. Grayscale conversion
-    2. Resize to 256 &times; 256 (`INTER_AREA`)
-    3. Normalize to [0, 1]
-    4. Forward pass &rarr; 4 logit maps
-    5. Sum logits &rarr; sigmoid &rarr; 0.5
-    """
-)
-
-st.sidebar.markdown("---")
-
 st.sidebar.markdown(
     """
     <div style="color:#34505E; font-size:0.78rem; line-height:1.5;">
